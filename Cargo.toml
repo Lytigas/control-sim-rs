@@ -9,3 +9,4 @@ alga = "0.7.2"
 
 [dev-dependencies]
 nalgebra = "0.16.2"
+assert_approx_eq = "1.0.0"
