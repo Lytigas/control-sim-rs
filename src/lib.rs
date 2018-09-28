@@ -34,7 +34,7 @@ pub fn rk4_one_var(
 pub fn rk4<S, V>(tn: S, xn: V, vn: V, h: S, acc_fun: impl Fn(S, V) -> V) -> (V, V)
 where
     S: Real,
-    V: VectorSpace<Field = S> + Copy,
+    V: VectorSpace<Field = S>,
 {
     let _2 = S::from_i32(2).unwrap();
     let _6 = S::from_i32(6).unwrap();
@@ -42,16 +42,16 @@ where
     let __2 = _2.recip();
     let __6 = _6.recip();
 
-    let k1 = acc_fun(tn, vn);
-    let k2 = acc_fun(tn + (h * __2), vn + k1 * (h * __2));
-    let k3 = acc_fun(tn + (h * __2), vn + k2 * (h * __2));
-    let k4 = acc_fun(tn + h, vn + (k3 * h));
-    let vn1 = vn + (k1 + k2 * _2 + k3 * _2 + k4) * (h * __6);
+    let k1 = acc_fun(tn, vn.clone());
+    let k2 = acc_fun(tn + (h * __2), vn.clone() + k1.clone() * (h * __2));
+    let k3 = acc_fun(tn + (h * __2), vn.clone() + k2.clone() * (h * __2));
+    let k4 = acc_fun(tn + h, vn.clone() + (k3.clone() * h));
+    let vn1 = vn.clone() + (k1 + k2 * _2 + k3 * _2 + k4) * (h * __6);
 
-    let k1x = vn;
-    let k2x = vn + k1x * (h / _2);
-    let k3x = vn + k2x * (h / _2);
-    let k4x = vn + k3x * h;
+    let k1x = vn.clone();
+    let k2x = vn.clone() + k1x.clone() * (h / _2);
+    let k3x = vn.clone() + k2x.clone() * (h / _2);
+    let k4x = vn + k3x.clone() * h;
     let xn1 = xn + (k1x + k2x * _2 + k3x * _2 + k4x) * (h * __6);
 
     return (xn1, vn1);
