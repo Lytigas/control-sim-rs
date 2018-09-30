@@ -5,162 +5,233 @@
 extern crate assert_approx_eq;
 
 extern crate alga;
-use alga::general::Real;
-use alga::linear::VectorSpace;
+#[macro_use]
+extern crate dimensioned as dim;
+use dim::si;
 
-pub fn rk4_one_var(
-    tn: f64,
-    xn: f64,
-    vn: f64,
-    h: f64,
-    acc_fun: impl Fn(f64, f64) -> f64,
-) -> (f64, f64) {
-    let k1 = acc_fun(tn, vn);
-    let k2 = acc_fun(tn + h / 2., vn + k1 * h / 2.);
-    let k3 = acc_fun(tn + h / 2., vn + k2 * h / 2.);
-    let k4 = acc_fun(tn + h, vn + k3 * h);
-    let vn1 = vn + (k1 + 2. * k2 + 2. * k3 + k4) * (h / 6.);
+pub mod integration;
 
-    let k1x = vn;
-    let k2x = vn + k1x * h / 2.;
-    let k3x = vn + k2x * h / 2.;
-    let k4x = vn + k3x * h;
-    let xn1 = xn + (k1x + 2. * k2x + 2. * k3x + k4x) * (h / 6.);
-
-    return (xn1, vn1);
+pub trait Simulatable<V> {
+    type Sim: SimulationLaw<V>;
 }
 
-// https://scicomp.stackexchange.com/questions/21060/runge-kutta-simulation-for-projectile-motion-with-drag
-pub fn rk4<S, V>(tn: S, xn: V, vn: V, h: S, acc_fun: impl Fn(S, V) -> V) -> (V, V)
-where
-    S: Real,
-    V: VectorSpace<Field = S>,
-{
-    let _2 = S::from_i32(2).unwrap();
-    let _6 = S::from_i32(6).unwrap();
-
-    let __2 = _2.recip();
-    let __6 = _6.recip();
-
-    let k1 = acc_fun(tn, vn.clone());
-    let k2 = acc_fun(tn + (h * __2), vn.clone() + k1.clone() * (h * __2));
-    let k3 = acc_fun(tn + (h * __2), vn.clone() + k2.clone() * (h * __2));
-    let k4 = acc_fun(tn + h, vn.clone() + (k3.clone() * h));
-    let vn1 = vn.clone() + (k1 + k2 * _2 + k3 * _2 + k4) * (h * __6);
-
-    let k1x = vn.clone();
-    let k2x = vn.clone() + k1x.clone() * (h / _2);
-    let k3x = vn.clone() + k2x.clone() * (h / _2);
-    let k4x = vn + k3x.clone() * h;
-    let xn1 = xn + (k1x + k2x * _2 + k3x * _2 + k4x) * (h * __6);
-
-    return (xn1, vn1);
+pub trait SimulationLaw<V> {
+    fn acc(volt: si::Volt<V>, vel: si::MeterPerSecond<V>) -> si::MeterPerSecond2<V>;
 }
 
-#[cfg(test)]
-mod tests {
-    extern crate nalgebra;
-    extern crate test;
-    use self::nalgebra::core::MatrixMN;
-    use self::nalgebra::U1;
-    use self::test::Bencher;
+#[macro_use]
+mod util {
+    pub fn clamp<T: PartialOrd>(a: T, lower: T, upper: T) -> T {
+        debug_assert!(lower < upper);
+        if a < lower {
+            lower
+        } else if a > upper {
+            upper
+        } else {
+            a
+        }
+    }
+
+    use dim::si;
+    pub trait DistanceSensor<V> {
+        fn get(&self) -> si::Meter<V>;
+    }
+
+    pub trait LimitSwitch {
+        fn get(&self) -> bool;
+    }
+
+    macro_rules! const_unit {
+        ($val:expr) => {
+            dim::si::SI {
+                value_unsafe: $val,
+                _marker: ::std::marker::PhantomData,
+            }
+        };
+    }
+
+    pub trait Polarity {
+        fn is_invert() -> bool;
+    }
+    struct Forward;
+    impl Polarity for Forward {
+        #[inline]
+        fn is_invert() -> bool {
+            false
+        }
+    }
+    struct Reverse;
+    impl Polarity for Reverse {
+        #[inline]
+        fn is_invert() -> bool {
+            true
+        }
+    }
+}
+#[macro_use]
+mod assertions;
+
+mod example {
     use super::*;
-    use std::ops::Index;
-
-    #[test]
-    fn generic() {
-        pub type V = MatrixMN<f64, U1, U1>;
-        let h = 0.01;
-
-        let g = V::from([9.81]);
-        let acc_fun = |_t, v| g - 1.0 * v;
-        let mut t = Vec::new();
-        let mut x = Vec::new();
-        let mut v = Vec::new();
-
-        let mut tn = 0.;
-        let mut xn = V::zeros();
-        let mut vn = V::zeros();
-
-        for _ in 1..10000 {
-            let a = rk4(tn, xn, vn, h, acc_fun);
-            xn = a.0;
-            vn = a.1;
-            tn += h;
-            t.push(tn);
-            x.push(xn);
-            v.push(vn);
-        }
-        assert_approx_eq!(
-            xn.index((0, 0)),
-            975.9142065967176,
-            975.9142065967176 * 0.005
-        )
-    }
-    #[test]
-    fn expl() {
-        let h = 0.01;
-
-        let g = 9.81;
-        let acc_fun = |_t, v| g - 1.0 * v;
-        let mut t = Vec::new();
-        let mut x = Vec::new();
-        let mut v = Vec::new();
-
-        let mut tn = 0.;
-        let mut xn = 0.;
-        let mut vn = 0.;
-
-        for _ in 1..10000 {
-            let a = rk4_one_var(tn, xn, vn, h, acc_fun);
-            xn = a.0;
-            vn = a.1;
-            tn += h;
-            t.push(tn);
-            x.push(xn);
-            v.push(vn);
-        }
-        assert_approx_eq!(xn, 975.9142065967176, 975.9142065967176 * 0.005)
+    #[derive(Copy, Clone, Debug)]
+    enum LoopState {
+        Unitialized,
+        Zeroing,
+        Running,
     }
 
-    #[bench]
-    fn bench_expl(b: &mut Bencher) {
-        let h = 0.01;
-        let g = 9.81;
-        let acc_fun = |_t, v| g - 1.0 * v;
-        let mut tn = 0.;
-        let mut xn = 0.;
-        let mut vn = 0.;
-        b.iter(|| {
-            for _ in 0..10000 {
-                let a = rk4_one_var(tn, xn, vn, h, acc_fun);
-                xn = a.0;
-                vn = a.1;
-                tn += h;
+    #[derive(Clone, Debug)]
+    struct ElevatorPIDLoop {
+        state: LoopState,
+        sp: si::Meter<f64>,
+        last_err: si::Meter<f64>,
+        zero_offset: si::Meter<f64>,
+        zero_goal: si::Meter<f64>,
+    }
+
+    use dim::typenum::{N1, N2, P1, Z0};
+    pub type VoltSecondPerMeter<V> = si::SI<V, tarr![P1, P1, N2, N1, Z0, Z0, Z0]>; // also Newtons per Amp
+
+    impl ElevatorPIDLoop {
+        pub const ZEROING_SPEED: si::MeterPerSecond<f64> = const_unit!(0.01);
+        pub const MAX_HEIGHT: si::Meter<f64> = const_unit!(2.5);
+        pub const MIN_HEIGHT: si::Meter<f64> = const_unit!(-0.02);
+        pub const DT: si::Second<f64> = const_unit!(1. / 200.);
+        pub const KP: si::VoltPerMeter<f64> = const_unit!(0.8);
+        pub const KD: VoltSecondPerMeter<f64> = const_unit!(0.);
+
+        fn new() -> Self {
+            Self {
+                state: LoopState::Unitialized,
+                last_err: 0. * si::M,
+                sp: 0. * si::M,
+                zero_offset: 0. * si::M,
+                zero_goal: 0. * si::M,
             }
-            test::black_box(xn);
-        })
+        }
     }
 
-    #[bench]
-    fn bench_generic(b: &mut Bencher) {
-        pub type V = MatrixMN<f64, U1, U1>;
-        let h = 0.01;
-        let g = V::from([9.81]);
-        let acc_fun = |_t, v| g - 1.0 * v;
+    impl Simulatable<f64> for ElevatorPIDLoop {
+        type Sim = ElevatorSim;
+    }
 
-        let mut tn = 0.;
-        let mut xn = V::zeros();
-        let mut vn = V::zeros();
+    impl ElevatorPIDLoop {
+        fn iterate(&mut self, encoder: si::Meter<f64>, limit: bool) -> si::Volt<f64> {
+            let filtered_goal;
+            match self.state {
+                LoopState::Unitialized => {
+                    self.zero_goal = encoder;
+                    self.state = LoopState::Zeroing;
+                    return self.iterate(encoder, limit);
+                }
+                LoopState::Zeroing => {
+                    if limit {
+                        self.state = LoopState::Running;
+                        self.zero_offset = encoder;
+                        self.last_err = 0. * si::M;
+                        return self.iterate(encoder, limit);
+                    }
+                    self.zero_goal = self.zero_goal - (Self::ZEROING_SPEED * Self::DT);
+                    filtered_goal = self.zero_goal;
+                }
+                LoopState::Running => {
+                    dbg_lt!(encoder - self.zero_offset, Self::MAX_HEIGHT);
+                    dbg_gt!(encoder - self.zero_offset, Self::MIN_HEIGHT);
+                    filtered_goal = util::clamp(self.sp, Self::MIN_HEIGHT, Self::MAX_HEIGHT);
+                }
+            };
+            let err = filtered_goal - (encoder - self.zero_offset);
+            let v = util::clamp(
+                err * Self::KP + ((err - self.last_err) / Self::DT) * Self::KD,
+                -12. * si::V,
+                12. * si::V,
+            );
 
-        b.iter(|| {
-            for _ in 0..10000 {
-                let a = rk4(tn, xn, vn, h, acc_fun);
-                xn = a.0;
-                vn = a.1;
-                tn += h;
+            self.last_err = err;
+            return v;
+        }
+
+        fn set_goal(&mut self, sp: si::Meter<f64>) {
+            self.sp = sp;
+        }
+
+        fn state(&self) -> LoopState {
+            self.state
+        }
+    }
+
+    struct ElevatorSim;
+    impl SimulationLaw<f64> for ElevatorSim {
+        fn acc(volt: si::Volt<f64>, vel: si::MeterPerSecond<f64>) -> si::MeterPerSecond2<f64> {
+            #![allow(non_snake_case)]
+            let m = 5. * si::KG;
+            let r = 0.1524 * si::M;
+            let R = 12. * si::V / (133. * si::A);
+            let G = 20.; // how much slower the output is than input
+            let Kt = 24. * si::N * si::M / (133. * si::A);
+            let Kv = (558.15629415 /*rad*/ / si::S) / (12. * si::V);
+
+            (G * Kt * (Kv * volt * r - G * vel)) / (m * Kv * R * r * r)
+        }
+    }
+
+    #[cfg(test)]
+    mod test {
+        use super::*;
+        #[test]
+        fn basic() {
+            let mut encoder = 0.3 * si::M;
+            let mut limit = false;
+            let mut v = 0. * si::MPS;
+            let mut l = ElevatorPIDLoop::new();
+            l.set_goal(1. * si::M);
+            fn sim_time(
+                l: &mut ElevatorPIDLoop,
+                v: si::Volt<f64>,
+                h: si::Second<f64>,
+                vel: &mut si::MeterPerSecond<f64>,
+                enc: &mut si::Meter<f64>,
+                limit: &mut bool,
+            ) {
+                let dt = 1. / 10000. * si::S;
+                assert!(*(h / dt) as u32 > 0);
+                for _ in 0..(*(h / dt) as u32) {
+                    let acc = <ElevatorPIDLoop as Simulatable<f64>>::Sim::acc(v, *vel);
+                    *vel = *vel + acc * dt;
+                    *enc = *enc + *vel * dt;
+                    *limit = *enc <= (0.0 * si::M);
+                }
+
+                assert!(*enc < 2.5 * si::M);
             }
-            test::black_box(xn);
-        });
+            extern crate csv;
+            let mut csv = csv::Writer::from_path("./test.csv").unwrap();
+            let mut vec = Vec::new();
+            for i in 0..20000 {
+                // 50 sec
+                let volt = l.iterate(encoder + 13.01 * si::M, limit);
+                sim_time(
+                    &mut l,
+                    volt,
+                    ElevatorPIDLoop::DT,
+                    &mut v,
+                    &mut encoder,
+                    &mut limit,
+                );
+                dbg_isfinite!(*(encoder / si::M));
+                dbg_isfinite!(*(v / si::MPS));
+                dbg_isfinite!(*(volt / si::V));
+                if i % 40 == 0 {
+                    vec.push((
+                        //*(encoder / si::M + 13.01),
+                        *(encoder / si::M),
+                        *(v / si::MPS),
+                        *(volt / si::V),
+                        1.,
+                    ))
+                }
+            }
+            vec.iter().for_each(|r| csv.serialize(r).unwrap());
+        }
     }
 }
