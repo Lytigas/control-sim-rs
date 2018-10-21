@@ -9,7 +9,7 @@ dimensioned = "0.7.0"
 
 
 [dev-dependencies]
-nalgebra = "0.16.2"
+# nalgebra = "0.16.2"
 assert_approx_eq = "1.0.0"
 csv = "1"
 serde = "1.0"

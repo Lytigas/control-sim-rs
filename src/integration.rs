@@ -47,7 +47,7 @@ where
     return (xn1, vn1);
 }
 
-#[cfg(test)]
+#[cfg(all(test, not(test)))]
 mod tests {
     extern crate nalgebra;
     extern crate test;
