@@ -1,6 +1,71 @@
 #![feature(test)]
 #![feature(const_fn)]
 
+pub trait HarnessAble {
+    /// A type representing the state of the system
+    type State: Copy;
+    /// A type that represents the output of the controller
+    type ControlResponse: Copy;
+    /// Physically simulates the system over the time where the control response is constant
+    fn sim_time(s: Self::State, r: Self::ControlResponse, dur: si::Second<f64>) -> Self::State;
+    /// The duration of one period for physics simulation
+    const SIMUL_DT: si::Second<f64>;
+    /// The interval between control response updates
+    const CONTROL_DT: si::Second<f64>;
+}
+
+/// Shims a physically simulated state into simulated sensors passed to the control loop.
+///
+/// Can be used to simulate things like encoder offsets, failing sensors.
+pub trait StateShim<SYS>
+where
+    SYS: HarnessAble,
+{
+    /// The output of the shimmed controller based on the current physical state
+    fn update(&mut self, SYS::State) -> SYS::ControlResponse;
+
+    /// Include safety assertions about the physical state. Will be called in tests
+    fn assert(&mut self, SYS::State) {}
+}
+
+pub struct SimulationHarness<SYS, SHIM>
+where
+    SYS: HarnessAble,
+    SHIM: StateShim<SYS>,
+{
+    shim: SHIM,
+    state: SYS::State,
+    time: si::Second<f64>,
+    log_every: u32,
+}
+
+impl<SYS, SHIM> SimulationHarness<SYS, SHIM>
+where
+    SYS: HarnessAble,
+    SHIM: StateShim<SYS>,
+{
+    pub fn new(shim: SHIM, initial: SYS::State, log_every: u32) -> Self {
+        Self {
+            shim,
+            state: initial,
+            time: 0. * si::S,
+            log_every,
+        }
+    }
+
+    pub fn run_time(&mut self, time: si::Second<f64>) -> SYS::State {
+        let mut elapsed = 0. * si::S;
+        while elapsed < time {
+            let response = self.shim.update(self.state);
+            self.state = SYS::sim_time(self.state, response, SYS::CONTROL_DT);
+            self.shim.assert(self.state);
+            elapsed += SYS::CONTROL_DT;
+            self.time += SYS::CONTROL_DT;
+        }
+        return self.state;
+    }
+}
+
 #[cfg(test)]
 #[macro_use]
 extern crate assert_approx_eq;
@@ -139,7 +204,7 @@ mod example {
             let mut pos = now.pos;
             let mut vel = now.vel;
             while elapsed < dur {
-                vel += ElevatorSim::acc(now.vol, now.vel) * Self::SIM_DT;
+                vel += ElevatorSim::acc(now.vol, vel) * Self::SIM_DT;
                 pos += vel * Self::SIM_DT;
                 elapsed += Self::SIM_DT;
             }
@@ -200,6 +265,61 @@ mod example {
         }
     }
 
+    #[derive(Debug, Copy, Clone)]
+    struct ElevatorPhysicsState {
+        pos: si::Meter<f64>,
+        vel: si::MeterPerSecond<f64>,
+    }
+
+    impl HarnessAble for ElevatorPIDLoop {
+        type State = ElevatorPhysicsState;
+        type ControlResponse = si::Volt<f64>;
+        // 1000 sims per dt
+        const SIMUL_DT: si::Second<f64> = const_unit!(1. / 200. / 1000.);
+        const CONTROL_DT: si::Second<f64> = const_unit!(1. / 200.);
+        fn sim_time(s: Self::State, r: Self::ControlResponse, dur: si::Second<f64>) -> Self::State {
+            let mut elapsed = 0. * si::S;
+            let mut pos = s.pos;
+            let mut vel = s.vel;
+            while elapsed < dur {
+                vel += ElevatorSim::acc(r, vel) * Self::SIMUL_DT;
+                pos += vel * Self::SIMUL_DT;
+                elapsed += Self::SIMUL_DT;
+            }
+            ElevatorPhysicsState { pos, vel }
+        }
+    }
+
+    #[derive(Debug, Clone)]
+    struct ElevatorShim {
+        enc_off: si::Meter<f64>,
+        control: ElevatorPIDLoop,
+    }
+
+    impl ElevatorShim {
+        pub fn new(offset: si::Meter<f64>, control: ElevatorPIDLoop) -> Self {
+            Self {
+                enc_off: offset,
+                control,
+            }
+        }
+    }
+
+    impl StateShim<ElevatorPIDLoop> for ElevatorShim {
+        fn update(&mut self, state: ElevatorPhysicsState) -> si::Volt<f64> {
+            self.control
+                .iterate(state.pos + self.enc_off, state.pos <= 0. * si::M)
+        }
+
+        fn assert(&mut self, state: ElevatorPhysicsState) {
+            assert!(state.pos <= ElevatorPIDLoop::MAX_HEIGHT);
+            assert!(state.pos <= ElevatorPIDLoop::MIN_HEIGHT);
+            dbg_isfinite!(state.pos / si::M);
+            dbg_isfinite!(state.vel / si::MPS);
+            // etc.
+        }
+    }
+
     struct ElevatorSim;
     impl SimulationLaw<f64> for ElevatorSim {
         fn acc(volt: si::Volt<f64>, vel: si::MeterPerSecond<f64>) -> si::MeterPerSecond2<f64> {
@@ -256,6 +376,19 @@ mod example {
                 }
             }
             data.iter().for_each(|r| csv.serialize(r).unwrap());
+        }
+
+        #[test]
+        fn with_harness() {
+            let harness = SimulationHarness::new(
+                ElevatorShim::new(1. * si::M, ElevatorPIDLoop::new()),
+                ElevatorPhysicsState {
+                    pos: 0. * si::M,
+                    vel: 0. * si::MPS,
+                },
+                20,
+            );
+            harness.run_time(10 * si::S),
         }
     }
 }
