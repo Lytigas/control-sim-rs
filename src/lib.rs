@@ -1,10 +1,34 @@
 #![feature(test)]
 #![feature(const_fn)]
 
-extern crate approx;
-pub use approx::*;
-extern crate csv;
-extern crate serde;
+pub mod integration;
+
+// re-exports
+pub mod approx {
+    pub use approx::*;
+}
+
+#[macro_use]
+pub mod units {
+    pub use dimensioned::si::*;
+    use dimensioned::{
+        si,
+        typenum::{tarr, N1, N2, P1, Z0},
+    };
+    /// Used for Kd in PID loops
+    pub type VoltSecondPerMeter<V> = si::SI<V, tarr![P1, P1, N2, N1, Z0, Z0, Z0]>; // also Newtons per Amp
+
+    #[macro_export]
+    macro_rules! const_unit {
+        ($val:expr) => {
+            dimensioned::si::SI {
+                value_unsafe: $val,
+                _marker: std::marker::PhantomData,
+            }
+        };
+    }
+}
+
 use serde::Serialize;
 use std::fs::File;
 use std::path::Path;
@@ -137,16 +161,7 @@ where
     }
 }
 
-#[cfg(test)]
-#[macro_use]
-extern crate assert_approx_eq;
-
-extern crate alga;
-#[macro_use]
-extern crate dimensioned as dim;
-use crate::dim::si;
-
-pub mod integration;
+use self::units as si;
 
 pub trait SimulationLaw<V> {
     fn acc(volt: si::Volt<V>, vel: si::MeterPerSecond<V>) -> si::MeterPerSecond2<V>;
@@ -162,42 +177,6 @@ mod util {
             upper
         } else {
             a
-        }
-    }
-
-    use crate::dim::si;
-    pub trait DistanceSensor<V> {
-        fn get(&self) -> si::Meter<V>;
-    }
-
-    pub trait LimitSwitch {
-        fn get(&self) -> bool;
-    }
-
-    macro_rules! const_unit {
-        ($val:expr) => {
-            dim::si::SI {
-                value_unsafe: $val,
-                _marker: ::std::marker::PhantomData,
-            }
-        };
-    }
-
-    pub trait Polarity {
-        fn is_invert() -> bool;
-    }
-    struct Forward;
-    impl Polarity for Forward {
-        #[inline]
-        fn is_invert() -> bool {
-            false
-        }
-    }
-    struct Reverse;
-    impl Polarity for Reverse {
-        #[inline]
-        fn is_invert() -> bool {
-            true
         }
     }
 }
@@ -225,16 +204,13 @@ mod example {
         zero_goal: si::Meter<f64>,
     }
 
-    use crate::dim::typenum::{N1, N2, P1, Z0};
-    pub type VoltSecondPerMeter<V> = si::SI<V, tarr![P1, P1, N2, N1, Z0, Z0, Z0]>; // also Newtons per Amp
-
     impl ElevatorPIDLoop {
         pub const ZEROING_SPEED: si::MeterPerSecond<f64> = const_unit!(0.04);
         pub const MAX_HEIGHT: si::Meter<f64> = const_unit!(2.5);
         pub const MIN_HEIGHT: si::Meter<f64> = const_unit!(-0.02);
         pub const DT: si::Second<f64> = const_unit!(1. / 200.);
         pub const KP: si::VoltPerMeter<f64> = const_unit!(20.0);
-        pub const KD: VoltSecondPerMeter<f64> = const_unit!(5.);
+        pub const KD: units::VoltSecondPerMeter<f64> = const_unit!(5.);
 
         pub fn new() -> Self {
             Self {
