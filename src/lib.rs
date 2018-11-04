@@ -32,13 +32,18 @@ where
     SYS: HarnessAble,
 {
     /// The output of the shimmed controller based on the current physical state
-    fn update(&mut self, SYS::State) -> SYS::ControlResponse;
+    fn update(&mut self, state: SYS::State) -> SYS::ControlResponse;
 
     /// Return data to log at the current time
-    fn log_dat(&mut self, SYS::State, SYS::ControlResponse, si::Second<f64>) -> SYS::LogData;
+    fn log_dat(
+        &mut self,
+        state: SYS::State,
+        response: SYS::ControlResponse,
+        time: si::Second<f64>,
+    ) -> SYS::LogData;
 
     /// Include safety assertions about the physical state. Will be called in tests
-    fn assert(&mut self, SYS::State) {}
+    fn assert(&mut self, state: SYS::State) {}
 }
 
 pub struct SimulationHarness<SYS, SHIM>
@@ -139,7 +144,7 @@ extern crate assert_approx_eq;
 extern crate alga;
 #[macro_use]
 extern crate dimensioned as dim;
-use dim::si;
+use crate::dim::si;
 
 pub mod integration;
 
@@ -160,7 +165,7 @@ mod util {
         }
     }
 
-    use dim::si;
+    use crate::dim::si;
     pub trait DistanceSensor<V> {
         fn get(&self) -> si::Meter<V>;
     }
@@ -220,7 +225,7 @@ mod example {
         zero_goal: si::Meter<f64>,
     }
 
-    use dim::typenum::{N1, N2, P1, Z0};
+    use crate::dim::typenum::{N1, N2, P1, Z0};
     pub type VoltSecondPerMeter<V> = si::SI<V, tarr![P1, P1, N2, N1, Z0, Z0, Z0]>; // also Newtons per Amp
 
     impl ElevatorPIDLoop {
