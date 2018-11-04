@@ -141,12 +141,6 @@ use dim::si;
 
 pub mod integration;
 
-pub trait Simulatable {
-    type State;
-    const SIM_DT: si::Second<f64>;
-    fn sim_duration(&mut self, now: Self::State, dur: si::Second<f64>) -> Self::State;
-}
-
 pub trait SimulationLaw<V> {
     fn acc(volt: si::Volt<V>, vel: si::MeterPerSecond<V>) -> si::MeterPerSecond2<V>;
 }
@@ -235,7 +229,7 @@ mod example {
         pub const KP: si::VoltPerMeter<f64> = const_unit!(20.0);
         pub const KD: VoltSecondPerMeter<f64> = const_unit!(5.);
 
-        fn new() -> Self {
+        pub fn new() -> Self {
             Self {
                 state: LoopState::Unitialized,
                 last_err: 0. * si::M,
@@ -244,42 +238,17 @@ mod example {
                 zero_goal: 0. * si::M,
             }
         }
-    }
 
-    #[derive(Copy, Clone, Debug)]
-    struct ElevatorState {
-        pos: si::Meter<f64>,
-        vel: si::MeterPerSecond<f64>,
-        vol: si::Volt<f64>,
-    }
+        pub fn acc(volt: si::Volt<f64>, vel: si::MeterPerSecond<f64>) -> si::MeterPerSecond2<f64> {
+            #![allow(non_snake_case)]
+            let m = 5. * si::KG;
+            let r = 0.1524 * si::M;
+            let R = 12. * si::V / (133. * si::A);
+            let G = 20.; // how much slower the output is than input
+            let Kt = 24. * si::N * si::M / (133. * si::A);
+            let Kv = (558.15629415 /*rad*/ / si::S) / (12. * si::V);
 
-    impl ElevatorState {
-        pub fn get_encoder(&self, offset: si::Meter<f64>) -> si::Meter<f64> {
-            self.pos + offset
-        }
-
-        pub fn get_limit(&self) -> bool {
-            self.pos <= 0.0 * si::M
-        }
-    }
-
-    impl Simulatable for ElevatorPIDLoop {
-        type State = ElevatorState;
-        const SIM_DT: si::Second<f64> = const_unit!(1. / 200. / 100.);
-        fn sim_duration(&mut self, now: Self::State, dur: si::Second<f64>) -> Self::State {
-            let mut elapsed = 0. * si::S;
-            let mut pos = now.pos;
-            let mut vel = now.vel;
-            while elapsed < dur {
-                vel += ElevatorSim::acc(now.vol, vel) * Self::SIM_DT;
-                pos += vel * Self::SIM_DT;
-                elapsed += Self::SIM_DT;
-            }
-            ElevatorState {
-                pos,
-                vel,
-                vol: now.vol,
-            }
+            (G * Kt * (Kv * volt * r - G * vel)) / (m * Kv * R * r * r)
         }
     }
 
@@ -359,7 +328,7 @@ mod example {
             let mut pos = s.pos;
             let mut vel = s.vel;
             while elapsed < dur {
-                vel += ElevatorSim::acc(r, vel) * Self::SIMUL_DT;
+                vel += ElevatorPIDLoop::acc(r, vel) * Self::SIMUL_DT;
                 pos += vel * Self::SIMUL_DT;
                 elapsed += Self::SIMUL_DT;
             }
@@ -420,64 +389,9 @@ mod example {
         }
     }
 
-    struct ElevatorSim;
-    impl SimulationLaw<f64> for ElevatorSim {
-        fn acc(volt: si::Volt<f64>, vel: si::MeterPerSecond<f64>) -> si::MeterPerSecond2<f64> {
-            #![allow(non_snake_case)]
-            let m = 5. * si::KG;
-            let r = 0.1524 * si::M;
-            let R = 12. * si::V / (133. * si::A);
-            let G = 20.; // how much slower the output is than input
-            let Kt = 24. * si::N * si::M / (133. * si::A);
-            let Kv = (558.15629415 /*rad*/ / si::S) / (12. * si::V);
-
-            (G * Kt * (Kv * volt * r - G * vel)) / (m * Kv * R * r * r)
-        }
-    }
-
     #[cfg(test)]
     mod test {
         use super::*;
-        #[test]
-        fn basic() {
-            let mut state = ElevatorState {
-                pos: 0.1 * si::M,
-                vel: 0.0 * si::MPS,
-                vol: 0.0 * si::V,
-            };
-            let mut l = ElevatorPIDLoop::new();
-            l.set_goal(1. * si::M);
-
-            extern crate csv;
-            let mut csv = csv::WriterBuilder::new()
-                .delimiter(b'\t')
-                .from_path("./test.csv")
-                .unwrap();
-            csv.write_byte_record(&csv::ByteRecord::from(vec![
-                "pos", "vel", "volt", "setpoint",
-            ]))
-            .unwrap();
-            let mut data = Vec::new();
-            for i in 0..20000 {
-                // 50 sec
-                state.vol = l.iterate(state.get_encoder(-12.01 * si::M), state.get_limit());
-                state = l.sim_duration(state, ElevatorPIDLoop::DT);
-                assert!(state.pos <= ElevatorPIDLoop::MAX_HEIGHT);
-                dbg_isfinite!(state.pos / si::M);
-                dbg_isfinite!(state.vel / si::MPS);
-                dbg_isfinite!(state.vol / si::V);
-                if i % 40 == 0 {
-                    data.push((
-                        *(state.pos / si::M),
-                        *(state.vel / si::MPS),
-                        *(state.vol / si::V),
-                        *(l.get_goal() / si::M),
-                    ));
-                }
-            }
-            data.iter().for_each(|r| csv.serialize(r).unwrap());
-        }
-
         #[test]
         fn with_harness() {
             let mut harness = SimulationHarness::new(
