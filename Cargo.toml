@@ -1,7 +1,8 @@
 [package]
-name = "physics-sim"
+name = "control-sim"
 version = "0.1.0"
 authors = ["Josh Hejna <josh.hejna@gmail.com>"]
+edition = "2018"
 
 [dependencies]
 alga = "0.7.2"
@@ -9,6 +10,7 @@ dimensioned = "0.7.0"
 serde = "1.0.0"
 serde_derive = "1.0"
 csv = "1"
+approx = "0.3.0"
 
 
 [dev-dependencies]

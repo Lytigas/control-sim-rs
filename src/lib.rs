@@ -1,6 +1,8 @@
 #![feature(test)]
 #![feature(const_fn)]
 
+extern crate approx;
+pub use approx::*;
 extern crate csv;
 extern crate serde;
 use serde::Serialize;
@@ -272,8 +274,6 @@ mod example {
                     filtered_goal = self.zero_goal;
                 }
                 LoopState::Running => {
-                    dbg_lt!(encoder - self.zero_offset, Self::MAX_HEIGHT);
-                    dbg_gt!(encoder - self.zero_offset, Self::MIN_HEIGHT);
                     filtered_goal = util::clamp(self.sp, Self::MIN_HEIGHT, Self::MAX_HEIGHT);
                 }
             };
