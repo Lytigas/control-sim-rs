@@ -1,11 +1,19 @@
 #![feature(test)]
 #![feature(const_fn)]
 
+extern crate csv;
+extern crate serde;
+use serde::Serialize;
+use std::fs::File;
+use std::path::Path;
+
 pub trait HarnessAble {
     /// A type representing the state of the system
     type State: Copy;
     /// A type that represents the output of the controller
     type ControlResponse: Copy;
+    /// A type holding all the data logged to a csv once the test completes
+    type LogData: Serialize;
     /// Physically simulates the system over the time where the control response is constant
     fn sim_time(s: Self::State, r: Self::ControlResponse, dur: si::Second<f64>) -> Self::State;
     /// The duration of one period for physics simulation
@@ -24,6 +32,9 @@ where
     /// The output of the shimmed controller based on the current physical state
     fn update(&mut self, SYS::State) -> SYS::ControlResponse;
 
+    /// Return data to log at the current time
+    fn log_dat(&mut self, SYS::State, SYS::ControlResponse, si::Second<f64>) -> SYS::LogData;
+
     /// Include safety assertions about the physical state. Will be called in tests
     fn assert(&mut self, SYS::State) {}
 }
@@ -37,6 +48,8 @@ where
     state: SYS::State,
     time: si::Second<f64>,
     log_every: u32,
+    csv: Option<csv::Writer<File>>,
+    log: Vec<SYS::LogData>,
 }
 
 impl<SYS, SHIM> SimulationHarness<SYS, SHIM>
@@ -50,19 +63,70 @@ where
             state: initial,
             time: 0. * si::S,
             log_every,
+            csv: None,
+            log: Vec::new(),
         }
+    }
+
+    pub fn use_csv<P: AsRef<Path> + std::fmt::Debug>(&mut self, path: P) {
+        match path.as_ref().parent() {
+            Some(dir) => std::fs::create_dir_all(dir).expect(&format!(
+                "Could not create parent directory of csv {:?}",
+                path
+            )),
+            _ => (),
+        };
+
+        self.csv = Some(
+            csv::WriterBuilder::new()
+                .delimiter(b' ')
+                .from_path(path)
+                .expect("Could not create csv writer"),
+        )
+    }
+
+    pub fn shim(&self) -> &SHIM {
+        &self.shim
+    }
+
+    pub fn shim_mut(&mut self) -> &mut SHIM {
+        &mut self.shim
     }
 
     pub fn run_time(&mut self, time: si::Second<f64>) -> SYS::State {
         let mut elapsed = 0. * si::S;
+        let mut count = 0;
         while elapsed < time {
             let response = self.shim.update(self.state);
             self.state = SYS::sim_time(self.state, response, SYS::CONTROL_DT);
             self.shim.assert(self.state);
             elapsed += SYS::CONTROL_DT;
             self.time += SYS::CONTROL_DT;
+            count += 1;
+            if count >= self.log_every {
+                self.log
+                    .push(self.shim.log_dat(self.state, response, self.time));
+                count = 0;
+            }
         }
         return self.state;
+    }
+}
+
+// implement csv output in Drop so that it runs even on test failures
+impl<SYS, SHIM> Drop for SimulationHarness<SYS, SHIM>
+where
+    SYS: HarnessAble,
+    SHIM: StateShim<SYS>,
+{
+    fn drop(&mut self) {
+        match self.csv {
+            Some(ref mut wtr) => self.log.iter().for_each(|r| {
+                wtr.serialize(r)
+                    .unwrap_or_else(|_| println!("ERROR: Record serialization failed!"))
+            }),
+            _ => (),
+        }
     }
 }
 
@@ -139,6 +203,9 @@ mod util {
 #[macro_use]
 mod assertions;
 
+#[macro_use]
+extern crate serde_derive;
+
 mod example {
     use super::*;
     #[derive(Copy, Clone, Debug)]
@@ -161,7 +228,7 @@ mod example {
     pub type VoltSecondPerMeter<V> = si::SI<V, tarr![P1, P1, N2, N1, Z0, Z0, Z0]>; // also Newtons per Amp
 
     impl ElevatorPIDLoop {
-        pub const ZEROING_SPEED: si::MeterPerSecond<f64> = const_unit!(0.01);
+        pub const ZEROING_SPEED: si::MeterPerSecond<f64> = const_unit!(0.04);
         pub const MAX_HEIGHT: si::Meter<f64> = const_unit!(2.5);
         pub const MIN_HEIGHT: si::Meter<f64> = const_unit!(-0.02);
         pub const DT: si::Second<f64> = const_unit!(1. / 200.);
@@ -271,9 +338,19 @@ mod example {
         vel: si::MeterPerSecond<f64>,
     }
 
+    #[derive(Debug, Copy, Clone, Serialize)]
+    struct ElevatorLog {
+        time: f64,
+        pos: f64,
+        vel: f64,
+        volts: f64,
+        sp: f64,
+    }
+
     impl HarnessAble for ElevatorPIDLoop {
         type State = ElevatorPhysicsState;
         type ControlResponse = si::Volt<f64>;
+        type LogData = ElevatorLog;
         // 1000 sims per dt
         const SIMUL_DT: si::Second<f64> = const_unit!(1. / 200. / 1000.);
         const CONTROL_DT: si::Second<f64> = const_unit!(1. / 200.);
@@ -303,6 +380,14 @@ mod example {
                 control,
             }
         }
+
+        pub fn controller(&self) -> &ElevatorPIDLoop {
+            &self.control
+        }
+
+        pub fn controller_mut(&mut self) -> &mut ElevatorPIDLoop {
+            &mut self.control
+        }
     }
 
     impl StateShim<ElevatorPIDLoop> for ElevatorShim {
@@ -311,9 +396,24 @@ mod example {
                 .iterate(state.pos + self.enc_off, state.pos <= 0. * si::M)
         }
 
+        fn log_dat(
+            &mut self,
+            s: ElevatorPhysicsState,
+            r: si::Volt<f64>,
+            t: si::Second<f64>,
+        ) -> ElevatorLog {
+            ElevatorLog {
+                pos: *(s.pos / si::M),
+                vel: *(s.vel / si::MPS),
+                sp: *(self.control.get_goal() / si::M),
+                volts: *(r / si::V),
+                time: *(t / si::S),
+            }
+        }
+
         fn assert(&mut self, state: ElevatorPhysicsState) {
             assert!(state.pos <= ElevatorPIDLoop::MAX_HEIGHT);
-            assert!(state.pos <= ElevatorPIDLoop::MIN_HEIGHT);
+            assert!(state.pos >= ElevatorPIDLoop::MIN_HEIGHT);
             dbg_isfinite!(state.pos / si::M);
             dbg_isfinite!(state.vel / si::MPS);
             // etc.
@@ -380,15 +480,17 @@ mod example {
 
         #[test]
         fn with_harness() {
-            let harness = SimulationHarness::new(
+            let mut harness = SimulationHarness::new(
                 ElevatorShim::new(1. * si::M, ElevatorPIDLoop::new()),
                 ElevatorPhysicsState {
-                    pos: 0. * si::M,
+                    pos: 0.1 * si::M,
                     vel: 0. * si::MPS,
                 },
                 20,
             );
-            harness.run_time(10 * si::S),
+            harness.use_csv("harness.csv");
+            harness.shim_mut().controller_mut().set_goal(1. * si::M);
+            harness.run_time(30. * si::S);
         }
     }
 }
