@@ -1,12 +1,10 @@
 [package]
-name = "control-sim"
+name = "elevator_pid"
 version = "0.1.0"
 authors = ["Josh Hejna <josh.hejna@gmail.com>"]
 edition = "2018"
 
 [dependencies]
-alga = "0.7.2"
-dimensioned = "0.7.0"
+control-sim = {path = "../.."}
 serde = "1.0.0"
-csv = "1"
-approx = "0.3.0"
+serde_derive = "1.0"
