@@ -11,12 +11,9 @@ pub mod approx {
 #[macro_use]
 pub mod units {
     pub use dimensioned::si::*;
-    use dimensioned::{
-        si,
-        typenum::{tarr, N1, N2, P1, Z0},
-    };
+    use dimensioned::typenum::{tarr, N1, N2, P1, Z0};
     /// Used for Kd in PID loops
-    pub type VoltSecondPerMeter<V> = si::SI<V, tarr![P1, P1, N2, N1, Z0, Z0, Z0]>; // also Newtons per Amp
+    pub type VoltSecondPerMeter<V> = SI<V, tarr![P1, P1, N2, N1, Z0, Z0, Z0]>; // also Newtons per Amp
 
     #[macro_export]
     macro_rules! const_unit {
@@ -29,6 +26,7 @@ pub mod units {
     }
 }
 
+use crate::units as un;
 use serde::Serialize;
 use std::fs::File;
 use std::path::Path;
@@ -41,11 +39,11 @@ pub trait HarnessAble {
     /// A type holding all the data logged to a csv once the test completes
     type LogData: Serialize;
     /// Physically simulates the system over the time where the control response is constant
-    fn sim_time(s: Self::State, r: Self::ControlResponse, dur: si::Second<f64>) -> Self::State;
+    fn sim_time(s: Self::State, r: Self::ControlResponse, dur: un::Second<f64>) -> Self::State;
     /// The duration of one period for physics simulation
-    const SIMUL_DT: si::Second<f64>;
+    const SIMUL_DT: un::Second<f64>;
     /// The interval between control response updates
-    const CONTROL_DT: si::Second<f64>;
+    const CONTROL_DT: un::Second<f64>;
 }
 
 /// Shims a physically simulated state into simulated sensors passed to the control loop.
@@ -63,7 +61,7 @@ where
         &mut self,
         state: SYS::State,
         response: SYS::ControlResponse,
-        time: si::Second<f64>,
+        time: un::Second<f64>,
     ) -> SYS::LogData;
 
     /// Include safety assertions about the physical state. Will be called in tests
@@ -77,7 +75,7 @@ where
 {
     shim: SHIM,
     state: SYS::State,
-    time: si::Second<f64>,
+    time: un::Second<f64>,
     log_every: u32,
     csv: Option<csv::Writer<File>>,
     log: Vec<SYS::LogData>,
@@ -92,7 +90,7 @@ where
         Self {
             shim,
             state: initial,
-            time: 0. * si::S,
+            time: 0. * un::S,
             log_every,
             csv: None,
             log: Vec::new(),
@@ -124,8 +122,8 @@ where
         &mut self.shim
     }
 
-    pub fn run_time(&mut self, time: si::Second<f64>) -> SYS::State {
-        let mut elapsed = 0. * si::S;
+    pub fn run_time(&mut self, time: un::Second<f64>) -> SYS::State {
+        let mut elapsed = 0. * un::S;
         let mut count = 0;
         while elapsed < time {
             let response = self.shim.update(self.state);
@@ -161,12 +159,6 @@ where
     }
 }
 
-use self::units as si;
-
-pub trait SimulationLaw<V> {
-    fn acc(volt: si::Volt<V>, vel: si::MeterPerSecond<V>) -> si::MeterPerSecond2<V>;
-}
-
 pub mod util {
     pub fn clamp<T: PartialOrd>(a: T, lower: T, upper: T) -> T {
         debug_assert!(lower < upper);
@@ -181,4 +173,4 @@ pub mod util {
 }
 
 #[macro_use]
-pub mod assertions;
+mod assertions;
